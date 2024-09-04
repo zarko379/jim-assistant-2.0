@@ -1,12 +1,37 @@
 import speech_recognition as sr
 from openai import OpenAI
 import webbrowser
-import json
+import sys
+import threading
+import time
+from pystray import Icon, MenuItem, Menu
+from PIL import Image, ImageDraw
 import spotipy
+from spotipy.oauth2 import SpotifyOAuth
 from youtubesearchpython import VideosSearch
 import pyttsx3
 import os
 
+def create_image():
+    width = 64
+    height = 64
+    image = Image.new('RGB', (width, height), (255, 255, 255))
+    draw = ImageDraw.Draw(image)
+    draw.ellipse((width//4, height//4, width*3//4, height*3//4), fill=(0, 255, 0))
+    return image
+
+def on_quit(icon, item):
+    icon.stop()
+
+spotify_client_id = 'CLIENT_ID'
+spotify_client_secret = 'CLIENT_SECRET'
+spotify_redirect_uri = 'http://localhost:8888/callback/'
+spotify_scope = 'user-modify-playback-state,user-read-playback-state'
+
+sp = spotipy.Spotify(auth_manager=SpotifyOAuth(client_id=spotify_client_id,
+                                               client_secret=spotify_client_secret,
+                                               redirect_uri=spotify_redirect_uri,
+                                               scope=spotify_scope))
 status = "on"
 client = OpenAI(base_url="http://localhost:3333/v1", api_key="not-needed")
 recognizer = sr.Recognizer()
@@ -24,9 +49,10 @@ def speech_to_text():
     with sr.Microphone() as source:
         os.system("cls")
         print("Listening...")
-        recorded_audio = recognizer.listen(source, timeout=5)
+        recorded_audio = recognizer.listen(source)
         try:
-            text = recognizer.recognize_google(recorded_audio, language=language)
+            #text = recognizer.recognize_google(recorded_audio, language=language)
+            text = recognizer.recognize_assemblyai(recorded_audio, language=language)
             print(text)
             return text
         except sr.UnknownValueError:
@@ -69,6 +95,40 @@ def search_and_open_video(query):
     else:
         speak("Could not find the video")
 
+def play_spotify(query):
+    # CREATE AN APP FROM THE Spotify Developers Website
+    # NOTE: SPOTIFY PREMIUM IS REQUIRED
+    # SET THE RedirectURI to http://localhost:8888/callback/
+    track_results = sp.search(q=query, type='track', limit=1)
+    playlist_results = sp.search(q=query, type='playlist', limit=1)
+
+    track_items = track_results.get('tracks', {}).get('items', [])
+    playlist_items = playlist_results.get('playlists', {}).get('items', [])
+
+    if track_items:
+        track_uri = track_items[0]['uri']
+        print(f"Reproduciendo canción: {track_items[0]['name']} de {track_items[0]['artists'][0]['name']}")
+        uris = [track_uri]
+    elif playlist_items:
+        playlist_uri = playlist_items[0]['uri']
+        print(f"Reproduciendo lista de reproducción: {playlist_items[0]['name']}")
+        uris = [playlist_uri]
+    else:
+        print("No se encontró ni una canción ni una lista de reproducción con ese nombre.")
+        return
+    
+    devices = sp.devices()['devices']
+
+    current_playback = sp.current_playback()
+    
+    if current_playback is None or not current_playback.get('is_playing'):
+        device_id = devices[0]['id']
+        sp.start_playback(device_id=device_id, uris=uris)
+
+    device_id = current_playback['device']['id']
+
+    sp.start_playback(device_id=device_id, uris=uris)
+
 def task(request):
     request = request.split()
     if "Search" in request:
@@ -79,42 +139,46 @@ def task(request):
         url = f"https://www.google.com/search?q={request.replace(' ', '+')}"
         speak("Opening Web browser")
         webbrowser.open(url)
-    if "Youtube" or "youtube" in request: 
-        search_and_open_video(request)
-    if "Play" in request and "Youtube" not in request or "spotify" in request or "Spotify" in request:
-        print("Spotify")
-        # CREATE AN APP FROM THE Spotify Developers Website
-        # NOTE: SPOTIFY PREMIUM IS REQUIRED
-        # SET THE RedirectURI to http://google.com/callback/
-        spotify_username = 'SPOTIFY_USERNAME'
-        spotify_clientID = 'CLIENT_ID'
-        spotify_clientSecret = 'CLIENT_SECRET'
-        redirect_uri = 'http://google.com/callback/'
+    #elif "Youtube" or "youtube" in request: 
+    #    search_and_open_video(request)
+    elif "Play" in request and "Youtube" not in request or "spotify" in request or "Spotify" in request:
+        play_spotify(request)
 
-        oauth_object = spotipy.SpotifyOAuth(spotify_clientID, spotify_clientSecret, redirect_uri)
-        token_dict = oauth_object.get_access_token()
-        token = token_dict['access_token']
-        spotifyObject = spotipy.Spotify(auth=token)
-        user_name = spotifyObject.current_user()
-
-        #print(json.dumps(user_name, sort_keys=True, indent=4))
-
-
-text = None
-#while status == "on":
-try:
-    while text == None or text == "" or text == " ":
-        text = speech_to_text()
-        if not "Jim" or "jim" in text.split():
+def main():
+    try:
+        while True:
             text = None
-    answer = ai_answer(text)
-    request = ai_resoomer_request(text)
-    speak(answer)
-    task(request)
 
-except KeyboardInterrupt:
-    status = "off"
-    print("[!] Exiting...")
+            while text == None or text == "" or text == " ":
+                text = speech_to_text()
+                try:
+                    if not "Jim" or "jim" in text.split():
+                        text = None
+                except AttributeError as e:
+                    print("")
+            answer = ai_answer(text)
+            request = ai_resoomer_request(text)
+            speak(answer)
+            task(request)
 
-if status == "off":
-    exit()
+    except KeyboardInterrupt:
+        status = "off"
+        print("[!] Exiting...")
+
+    if status == "off":
+        exit()
+
+def setup(icon):
+    icon.visible = True
+    task_thread = threading.Thread(target=main)
+    task_thread.daemon = True
+    task_thread.start()
+
+if __name__ == '__main__':
+    menu = Menu(
+        MenuItem('Exit', on_quit)
+    )
+
+    icon = Icon("test", create_image(), "Jim Assistant", menu)
+
+    icon.run(setup)
