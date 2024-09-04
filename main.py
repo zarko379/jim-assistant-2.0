@@ -16,7 +16,6 @@ with sr.Microphone() as source:
     print("Adjusting settings...")
     recognizer.adjust_for_ambient_noise(source, duration=1)
 
-
 def speak(text):
     print(text)
     pyttsx3.speak(text)
